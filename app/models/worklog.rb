@@ -1,4 +1,3 @@
-#encoding: utf-8
 class Worklog < ActiveRecord::Base
   include Redmine::SafeAttributes
   
@@ -7,10 +6,21 @@ class Worklog < ActiveRecord::Base
   has_many :worklog_reviews
   
   attr_accessor :plan,:plan_done,:week_feel
+
+  scope :punctual, -> { where(status: 0) }
   
-  TYPEE = {"day" => 0,"week" => 1, "month" => 2, "year" => 3}
-  #SCORE = {"1分（最差）" => 1, "2分" => 2, "3分" => 3, "4分" => 4, "5分" => 5, "6分（及格）" => 6, "7分" => 7, "8分" => 8, "9分" => 9, "10分（最好）" => 10}
-  SCORE = {"A：超出预期" => 1, "B：完成" => 2, "C：未完成或结果不达标" => 3}
+  TYPEE = {
+    day: 0,
+    week: 1,
+    month: 2,
+    year: 3
+  }.freeze
+
+  SCORE = {
+    "A：超出预期" => 1,
+    "B：完成" => 2,
+    "C：未完成或结果不达标" => 3
+  }.freeze
 
   def plan
    case self.typee
@@ -26,42 +36,67 @@ class Worklog < ActiveRecord::Base
 
   return @plan
   end
-
   
-  def self.typee_collection
-      TYPEE.collect { |s| [s[0], s[1]]}
-  end
-  
-  def self.score_collection
-      SCORE.collect { |s| [s[0], s[1]]}
-  end
-  
-  
-  def self.no_need_users_ids
-    #format: 1,2
-    no_need_users_ids = []
-    unless Setting.plugin_worklogs['WORKLOGS_UN_IDS'].blank?
-      Setting.plugin_worklogs['WORKLOGS_UN_IDS'].split(",").each do |i|
-        no_need_users_ids << i.to_i
-      end      
+  class << self
+    def lastest_created_time
+      Worklog.order(id: :desc).first&.created_at || Time.zone.today
     end
-    #no_need_users_ids:["1", "61", "55", "46"]
-    logger.info("no_need_users_ids:#{no_need_users_ids}")
-    no_need_users_ids
-  end
-  
-  def self.no_need_users
-    no_need_users_ids = Worklog.no_need_users_ids
-    User.find(no_need_users_ids)
-  end
-  
-  #use to migration week data
-  def self.mig_week
-    Worklog.all.each do |w|
-      week = Date.parse(w.day).strftime("%W")
-      w.week = week
-      w.save
+
+    def typee_collection
+      TYPEE.collect { |s| [s[0], s[1]]}
+    end
+
+    def score_collection
+      SCORE.collect { |s| [s[0], s[1]]}
+    end
+
+    def no_need_users_ids
+      no_need_users_ids = []
+      unless Setting.plugin_worklogs['WORKLOGS_UN_IDS'].blank?
+        Setting.plugin_worklogs['WORKLOGS_UN_IDS'].split(",").each do |i|
+          no_need_users_ids << i.to_i
+        end      
+      end
+      logger.info("no_need_users_ids:#{no_need_users_ids}")
+      no_need_users_ids
     end
     
+    def no_need_users
+      no_need_users_ids = Worklog.no_need_users_ids
+      User.find(no_need_users_ids)
+    end
+
+    def mig_week
+      Worklog.each do |w|
+        week = Date.parse(w.day).strftime("%W")
+        w.week = week
+        w.save
+      end
+    end
+
+    def pagination_limit
+      (Setting.plugin_worklogs['WORKLOGS_PAGINATION_LIMIT'] || default_pagination_limit).to_i
+    end
+
+    def default_pagination_limit
+      20
+    end
+  end
+
+  before_save :set_author
+  before_create :set_date
+
+  private
+  def set_author
+    self.author = User.current
+  end
+
+  def set_date
+    today = Time.zone.today
+
+    self.day   = today
+    self.week  = today.strftime("%W").to_i
+    self.month = today.strftime("%m").to_i
+    self.year  = today.strftime("%Y").to_i
   end
 end

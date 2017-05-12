@@ -1,146 +1,111 @@
-#encoding: utf-8
 class WorklogsController < ApplicationController
   model_object Worklog
   unloadable
-
-  # before_filter :authorize, :only => [:index,:my,:new]
   
-  before_filter :find_model_object, :except => [:index, :new, :create,:my,:preview]
-  before_filter :init_slider,:only => [:index, :my, :new, :edit, :show]
+  before_action :find_model_object, except: [:index, :new, :create,:my,:preview]
+  before_action :init_slider, only: [:index, :my, :new, :edit, :show]
   
-  
-  def init_slider
-    @last=Worklog.find(:first,:order =>"created_at asc").created_at.to_date if Worklog.count > 0
-    @last ||= Date.today
-    # @last = Date.new(@start_topic.year,@start_topic.mon,1)
-    @start=Date.today
-    scope = User.logged.status(1)
-    @users =  scope.order("id asc").all - Worklog.no_need_users
-  end
-  
-  def load_worklogs
-    worklogs_scope = Worklog.where("status = 0")
-    if @user_id && @user_id.to_i > 0
-      worklogs_scope = worklogs_scope.where(:user_id => @user_id)
-    end
-    
-    unless @week.blank?
-      worklogs_scope = worklogs_scope.where(:week => @week)
-    end
-    
-    unless @typee.blank?
-      worklogs_scope = worklogs_scope.where(:typee => @typee)
-    end
-    
-    
-    worklogs_scope = worklogs_scope.order("day desc,id desc")
-    @limit =  Setting.plugin_worklogs['WORKLOGS_PAGINATION_LIMIT'].to_i || 20
-    # @worklogs = worklogs_scope.all#.limit(@limit)
-    
-    @worklogs_count = worklogs_scope.count
-    @worklogs_pages = Paginator.new @worklogs_count, @limit, params['page']
-    @offset ||= @worklogs_pages.offset
-    @worklogs = worklogs_scope.all(    :order => "#{Worklog.table_name}.created_at DESC",
-                                       :offset => @offset,
-                                       :limit => @limit)
-  end
-  
-
   def index
-    @user_id = params[:user_id]
-    @week = params[:week]
-    @typee = params[:typee]
-    load_worklogs
+    load_worklogs(**params.symbolize_keys)
   end
-  
+
   def preview
-    # logger.info(params[:worklog])
-    
-    if params[:id].present? && worklog = Worklog.visible.find_by_id(params[:id])
-      @previewed = worklog
-    end
-    # @text = (params[:worklog] ? params[:worklog][:do] : nil)
-    @worklog = Worklog.new(params[:worklog])
+    # where is the visible method?
+    @previewed = Worklog.find_by(id: params[:id])
+
+    @worklog = Worklog.new(worklog_params)
     @worklog.day = Date.today
     @worklog.week = Date.today.strftime("%W").to_i
     @worklog.author = User.current
-    render :partial => 'preview'
-  end
-  
 
-  
+    render partial: 'preview'
+  end
+
   def my
-    @user_id = session[:user_id]
-    @week = params[:week]
-    load_worklogs
-    render :action => :index
+    load_worklogs(user_id: session[:user_id], week: params[:week])
+    render :index
   end
 
   def new
-    @day = Date.today
+    @day = Time.zone.today
     @day_todo = Worklog.where("user_id = ? and day <> ? and typee = ?", session[:user_id],Date.today,0).last
     @week_todo = Worklog.where("user_id = ? and day <> ? and typee = ?", session[:user_id],Date.today,1).last
     @month_todo = Worklog.where("user_id = ? and day <> ? and typee = ?", session[:user_id],Date.today,2).last
     @year_todo = Worklog.where("user_id = ? and day <> ? and typee = ?", session[:user_id],Date.today,3).last
-    
-    # @wl = Worklog.where("user_id = ? and day = ?",session[:user_id],@day).first
-    # if @wl
-    #   redirect_to :action => 'edit',:id=> @wl.id
-    # else
-    #   @worklog = Worklog.new()      
-    # end
-    @worklog = Worklog.new()    
-    @worklog.typee = 1  
+
+    @worklog = Worklog.new(typee: 1)
   end
-  
-  
+
   def edit
     @day = Date.today
     @day_todo = Worklog.where("user_id = ? and day <> ? and typee = ?", session[:user_id],Date.today,0).last
     @week_todo = Worklog.where("user_id = ? and day <> ? and typee = ?", session[:user_id],Date.today,1).last
-
   end
 
   def show
     @worklog_reviews = @worklog.worklog_reviews
-    @worklog_review = WorklogReview.new()
+    @worklog_review = WorklogReview.new
   end
-  
 
   def review
-    @worklog_reviews = WorklogReview.new(params[:worklog_review])
+    @worklog_reviews = @worklog.worklog_reviews.build params[:worklog_review]
     @worklog_reviews.user = User.current
-    @worklog_reviews.worklog = @worklog
+
     if @worklog_reviews.save
       flash[:notice] = l(:notice_successful_update)
-      redirect_to worklog_path(:id=>@worklog.id)
+      redirect_to worklog_url(@worklog)
     end
   end
 
   def update
-    # @worklog.safe_attributes = params[:worklog]
-    @worklog.update_attributes(params[:worklog])
+    @worklog.update worklog_params
+    # why check request method here?
     if request.put? and @worklog.save
       flash[:notice] = l(:notice_successful_update)
-      redirect_to worklogs_path()
+      redirect_to worklogs_url
     else
-      render :action => 'edit',:id=>@worklog.id
+      render :edit
     end
   end
   
   def create
-    @worklog = Worklog.new(params[:worklog])
-    @worklog.day = Date.today
-    @worklog.week = Date.today.strftime("%W").to_i
-    @worklog.month = Date.today.strftime("%m").to_i
-    @worklog.year = Date.today.strftime("%Y").to_i
-    @worklog.author = User.current
+    @worklog = Worklog.new worklog_params
+
     if @worklog.save
-      redirect_to worklogs_path()
-    else
+      redirect_to worklogs_url
     end
-    
   end
 
+  protected
+  def worklog_params
+    params.require(:worklog).permit(:typee, :do, :todo, :feel, :score, :good, :nogood)
+  end
 
+  def load_worklogs(user_id: nil, week: nil, typee: nil, **_)
+    worklogs_scope = Worklog.punctual
+
+    worklogs_scope =
+      case true
+      when user_id.present?
+        worklogs_scope.where(user_id: user_id)
+      when week.present?
+        worklogs_scope.where(week: week)
+      when typee.present?
+        worklogs_scope.where(typee: typee)
+      else
+        worklogs_scope
+      end.order(day: :desc, id: :desc)
+
+    @worklogs_pages = Paginator.new worklogs_scope.count, Worklog.pagination_limit, params['page']
+    @worklogs = worklogs_scope
+      .order(created_at: :desc)
+      .offset(@offset || @worklogs_pages.offset)
+      .limit(Worklog.pagination_limit)
+  end
+
+  def init_slider
+    @last = Worklog.lastest_created_time
+    @start = Time.zone.today
+    @users =  User.logged.status(1).order(id: :asc) - Worklog.no_need_users
+  end
 end
